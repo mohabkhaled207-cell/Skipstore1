@@ -44,7 +44,6 @@ import {
 } from './utils/firebase';
 import { inferTryOnCategory, isValidTryOnAssetUrl } from './utils/tryOn';
 import { VirtualTryOnPanel } from './components/VirtualTryOnPanel';
-import { TryOnAdminSection } from './components/TryOnAdminSection';
 
 // SVG Icons
 const Icons = {
@@ -1052,9 +1051,7 @@ export default function App() {
                     >
                       {p.name}
                     </button>
-                    {isAdmin && inferTryOnCategory(p) !== 'unsupported' && !isValidTryOnAssetUrl(p.tryOnAssetUrl) && (
-                      <span className="ar-card-owner-hint">يحتاج أصل AR شفاف</span>
-                    )}
+                    
 
                     <div className="card-foot">
                       <span className={`tag ${p.price === null || p.price === undefined ? 'ask' : ''}`}>
@@ -1373,7 +1370,7 @@ export default function App() {
             </div>
           )}
 
-          {/* 2. Product Detail Modal (for Visitors) with Live AR Try-On + Add to Cart / WhatsApp */}
+          {/* 2. Product Detail Modal with AI photo try-on + Add to Cart / WhatsApp */}
           {activeModal === 'detail' && selectedProduct && (
             <div
               className={`sheet wide ${isTryOnOpen ? 'ar-sheet-expanded' : ''}`}
@@ -1425,13 +1422,9 @@ export default function App() {
                             data-testid="open-tryon-btn"
                           >
                             {Icons.camera}
-                            <span>جرّب الطقم بالكاميرا</span>
+                            <span>جرّب الطقم على صورتك بالذكاء الاصطناعي</span>
                           </button>
-                          {isAdmin && !isValidTryOnAssetUrl(selectedProduct.tryOnAssetUrl) && (
-                            <p className="ar-owner-warn" role="note">
-                              تنبيه للمالك: هذا المنتج يحتاج إلى تجهيز صورة ملابس شفافة (PNG/WebP) للتجربة المباشرة.
-                            </p>
-                          )}
+                          
                         </div>
                       )}
                     </div>
@@ -2137,17 +2130,6 @@ export default function App() {
                 <span>خلصت (غير متاحة في الفرع حالياً)</span>
               </label>
 
-              {/* Optional Live AR Try-On Asset & Anchor Configuration */}
-              <TryOnAdminSection
-                productImage={productForm.image}
-                tryOnAssetUrl={productForm.tryOnAssetUrl}
-                tryOnCategory={productForm.tryOnCategory}
-                tryOnConfig={productForm.tryOnConfig}
-                onChangeAssetUrl={(url) => setProductForm((prev) => ({ ...prev, tryOnAssetUrl: url }))}
-                onChangeCategory={(cat) => setProductForm((prev) => ({ ...prev, tryOnCategory: cat }))}
-                onChangeConfig={(cfg) => setProductForm((prev) => ({ ...prev, tryOnConfig: cfg }))}
-              />
-
               {formError && (
                 <p className="err" role="alert">
                   {formError}
@@ -2183,7 +2165,7 @@ export default function App() {
                     }}
                   >
                     {Icons.camera}
-                    <span>معاينة بالكاميرا</span>
+                    <span>معاينة تجربة الملابس بالذكاء الاصطناعي</span>
                   </button>
                 )}
                 {productForm.id && (
