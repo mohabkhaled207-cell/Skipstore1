@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Only the authenticated store-owner account may change store data.
+    function isStoreOwner() {
+      return request.auth != null
+        && request.auth.token.email == 'skipstore27@gmail.com';
+    }
+
+    // Store configuration and products are public to read, owner-only to write.
+    match /store_config/{configId} {
+      allow read: if true;
+      allow write: if isStoreOwner();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isStoreOwner();
+    }
+
+    // Customers may submit orders; only the owner may inspect or manage them.
+    match /orders/{orderId} {
+      allow create: if true;
+      allow read, update, delete: if isStoreOwner();
+    }
+
+    // Customers may create activity events; only the owner may inspect or clear them.
+    match /activity/{activityId} {
+      allow create: if true;
+      allow read, delete: if isStoreOwner();
+      allow update: if false;
+    }
+
+    // Public connection check; only the owner may write test documents.
+    match /test/{testId} {
+      allow read: if true;
+      allow write: if isStoreOwner();
+    }
+
+    // Deny every collection not explicitly listed above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

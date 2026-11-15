@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "General settings and store branch contact details",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "headline": { "type": "string" },
+        "sub": { "type": "string" },
+        "area": { "type": "string" },
+        "phone": { "type": "string" },
+        "facebook": { "type": "string" },
+        "tiktok": { "type": "string" },
+        "address": { "type": "string" },
+        "maps": { "type": "string" },
+        "logo": { "type": "string" }
+      },
+      "required": ["name", "phone"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Store outfit product item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "price": { "type": "number" },
+        "sizes": { "type": "string" },
+        "soldOut": { "type": "boolean" },
+        "image": { "type": "string" },
+        "updatedAt": { "type": "number" },
+        "tryOnAssetUrl": { "type": "string" },
+        "tryOnCategory": { "type": "string" },
+        "tryOnConfig": {
+          "type": "object",
+          "properties": {
+            "scaleX": { "type": "number" },
+            "scaleY": { "type": "number" },
+            "offsetX": { "type": "number" },
+            "offsetY": { "type": "number" },
+            "armOcclusion": { "type": "boolean" }
+          }
+        }
+      },
+      "required": ["id", "name"]
+    }
+  },
+  "firestore": {
+    "/store_config/settings": {
+      "schema": "StoreSettings",
+      "description": "Stores general store settings and branch contact info"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Individual product documents in products collection"
+    },
+    "/test/{testId}": {
+      "schema": "StoreSettings",
+      "description": "Test connection ping document"
+    }
+  }
+}
