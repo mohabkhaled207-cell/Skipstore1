@@ -1,5 +1,11 @@
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import FashnVtonTest from './components/FashnVtonTest.tsx';
 import './index.css';
 
-createRoot(document.getElementById('root')!).render(<App />);
+const root = createRoot(document.getElementById('root')!);
+if (window.location.pathname === '/try-on-lab') {
+  root.render(<FashnVtonTest />);
+} else {
+  root.render(<App />);
+}
