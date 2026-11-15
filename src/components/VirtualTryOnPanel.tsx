@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
+import { Client, handle_file } from '@gradio/client';
 import { Download, ImagePlus, Loader2, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { Product } from '../utils/store';
+import { inferTryOnCategory } from '../utils/tryOn';
 
 interface VirtualTryOnPanelProps {
   product: Product;
@@ -10,6 +12,9 @@ interface VirtualTryOnPanelProps {
 }
 
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
+const HF_SPACE = 'fashn-ai/fashn-vton-1.5';
+const HF_SPACE_ORIGIN = 'https://fashn-ai-fashn-vton-1-5.hf.space';
+let spaceClientPromise: ReturnType<typeof Client.connect> | null = null;
 
 async function compressPhoto(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) throw new Error('من فضلك اختر صورة بصيغة JPG أو PNG أو WebP.');
@@ -24,7 +29,44 @@ async function compressPhoto(file: File): Promise<string> {
   if (!ctx) throw new Error('تعذر تجهيز الصورة على هذا الجهاز.');
   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
   source.close();
-  return canvas.toDataURL('image/jpeg', 0.84);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('تعذر ضغط الصورة على هذا الجهاز.'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('تعذر قراءة الصورة بعد تجهيزها.'));
+      reader.readAsDataURL(blob);
+    }, 'image/jpeg', 0.84);
+  });
+}
+
+function dataUriToBlob(dataUri: string): Blob {
+  const match = /^data:(image\\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUri);
+  if (!match) throw new Error('تعذر تجهيز صورة الزبون للإرسال.');
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: match[1] });
+}
+
+function getTryOnOutputUrl(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.startsWith('http') ? value : new URL(value, HF_SPACE_ORIGIN).toString();
+  }
+  if (value && typeof value === 'object') {
+    const output = value as { url?: unknown; path?: unknown };
+    if (typeof output.url === 'string' && output.url) {
+      return new URL(output.url, HF_SPACE_ORIGIN).toString();
+    }
+    if (typeof output.path === 'string' && output.path) {
+      return new URL(`/gradio_api/file=${encodeURIComponent(output.path)}`, HF_SPACE_ORIGIN).toString();
+    }
+  }
+  throw new Error('لم يرجع محرك التجربة صورة صالحة. حاول مرة أخرى.');
 }
 
 export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, onClose }) => {
@@ -55,7 +97,7 @@ export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, o
       return;
     }
     if (!consent) {
-      setError('لازم توافق على إرسال الصور إلى Google لمعالجة تجربة الملابس.');
+      setError('لازم توافق على إرسال الصور إلى خدمة FASHN على Hugging Face.');
       return;
     }
     if (!product.image) {
@@ -63,30 +105,55 @@ export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, o
       return;
     }
 
+    const resolvedCategory = inferTryOnCategory(product);
+    if (resolvedCategory === 'unsupported') {
+      setError('التجربة الحالية تدعم الملابس فقط، ولا تدعم الأحذية أو الحقائب والإكسسوارات.');
+      return;
+    }
+
+    const category = resolvedCategory === 'trousers'
+      ? 'bottoms'
+      : resolvedCategory === 'full_outfit'
+        ? 'one-pieces'
+        : 'tops';
+
     setLoading(true);
     setError('');
     setResult('');
     try {
-      const response = await fetch('/api/tryon', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          personImage: photo,
-          productImageUrl: product.image,
-          productName: product.name,
-          productCategory: product.category,
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || 'تعذر إنشاء صورة التجربة. حاول مرة أخرى.');
+      if (!spaceClientPromise) {
+        spaceClientPromise = Client.connect(HF_SPACE);
       }
-      if (!data.image || !data.mimeType) {
-        throw new Error('وصل رد غير مكتمل من خدمة توليد الصور.');
-      }
-      setResult(`data:${data.mimeType};base64,${data.image}`);
+      const client = await spaceClientPromise;
+      const personFile = handle_file(dataUriToBlob(photo));
+      const garmentFile = product.image.startsWith('data:')
+        ? handle_file(dataUriToBlob(product.image))
+        : handle_file(product.image);
+
+      const response = await client.predict('/try_on', [
+        personFile,
+        garmentFile,
+        category,
+        'model',
+        30,
+        1.5,
+        42,
+        true,
+      ]);
+
+      const imageOutput = Array.isArray(response.data) ? response.data[0] : null;
+      setResult(getTryOnOutputUrl(imageOutput));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'حدث خطأ أثناء توليد الصورة.');
+      console.error('FASHN virtual try-on failed:', err);
+      spaceClientPromise = null;
+      const message = err instanceof Error ? err.message : '';
+      if (/429|rate|quota|limit/i.test(message)) {
+        setError('الخدمة المجانية مزدحمة أو وصلت إلى حد الاستخدام المؤقت. انتظر قليلاً ثم حاول مرة أخرى.');
+      } else if (/space|connect|fetch|network|offline/i.test(message)) {
+        setError('تعذر الاتصال بخدمة التجربة المجانية حالياً. قد تكون الخدمة نائمة أو مزدحمة؛ حاول مرة أخرى بعد قليل.');
+      } else {
+        setError(message || 'تعذر إنشاء صورة التجربة حالياً. جرّب صورة أوضح وإضاءة أفضل.');
+      }
     } finally {
       setLoading(false);
     }
@@ -98,7 +165,7 @@ export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, o
         <div>
           <span className="ai-tryon-kicker"><Sparkles size={15} /> تجربة بالذكاء الاصطناعي</span>
           <h3>شوف شكل القطعة عليك</h3>
-          <p>{product.name} — من غير كاميرا مباشرة أو موديل 3D</p>
+          <p>{product.name} — صورة مولّدة بدون كاميرا مباشرة أو موديل 3D</p>
         </div>
         <button type="button" className="ai-tryon-close" onClick={onClose} aria-label="إغلاق"><X size={20} /></button>
       </header>
@@ -131,12 +198,12 @@ export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, o
 
           <label className="ai-tryon-consent">
             <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
-            <span>أوافق على إرسال صورتي وصورة المنتج إلى Google Gemini لتوليد صورة تجربة الملابس. لن يحفظ موقع SKIP الصور في قاعدة بيانات المتجر.</span>
+            <span>أوافق على إرسال صورتي وصورة المنتج إلى خدمة FASHN على Hugging Face لمعالجة تجربة الملابس. لن يحفظ موقع SKIP الصور في قاعدة بيانات المتجر.</span>
           </label>
 
           {error && <p className="ai-tryon-error" role="alert">{error}</p>}
           <button type="button" className="btn btn-brand ai-tryon-generate" onClick={generate} disabled={loading || !photo || !consent}>
-            {loading ? <><Loader2 size={18} className="ai-tryon-spin" /> جاري توليد الصورة...</> : <><Sparkles size={18} /> جرّب الملابس على صورتي</>}
+            {loading ? <><Loader2 size={18} className="ai-tryon-spin" /> جاري تجهيز التجربة، قد يوجد انتظار...</> : <><Sparkles size={18} /> جرّب الملابس على صورتي</>}
           </button>
           <p className="ai-tryon-note"><ShieldCheck size={15} /> التجربة صورة مولّدة وليست قياساً دقيقاً للمقاس أو ضماناً لشكل القماش على الطبيعة.</p>
         </>
@@ -151,7 +218,7 @@ export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, o
       )}
 
       {error && result && <p className="ai-tryon-error" role="alert">{error}</p>}
-      <p className="ai-tryon-footer">تجربة الملابس بواسطة Nano Banana Pro من Google</p>
+      <p className="ai-tryon-footer">المحرك: FASHN VTON 1.5 مفتوح المصدر عبر Hugging Face Spaces. الاستخدام المجاني يعتمد على توفر GPU والحدود المؤقتة للخدمة.</p>
     </section>
   );
 };
