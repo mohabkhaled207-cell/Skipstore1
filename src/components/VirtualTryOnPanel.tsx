@@ -45,7 +45,7 @@ async function compressPhoto(file: File): Promise<string> {
 }
 
 function dataUriToBlob(dataUri: string): Blob {
-  const match = new RegExp('^data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)
+  const match = new RegExp('^data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)').exec(dataUri);
   if (!match) throw new Error('تعذر تجهيز صورة الزبون للإرسال.');
   const binary = atob(match[2]);
   const bytes = new Uint8Array(binary.length);
