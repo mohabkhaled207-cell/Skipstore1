@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@gradio/client": "^2.8.0",
     "@google/genai": "^2.4.0",
     "@mediapipe/tasks-vision": "^1.2.3",
     "@tailwindcss/vite": "^4.3.3",
