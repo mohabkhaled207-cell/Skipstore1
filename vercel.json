@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/try-on-lab",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/try-on-lab/",
+      "destination": "/index.html"
+    }
+  ]
+}
