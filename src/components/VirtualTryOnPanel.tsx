@@ -1,23 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import type { PoseLandmarker } from '@mediapipe/tasks-vision';
-import { Camera, RefreshCw, ShieldCheck, SlidersHorizontal, SwitchCamera, X } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Download, ImagePlus, Loader2, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { Product } from '../utils/store';
-import {
-  CameraErrorInfo,
-  detectDevicePerformanceProfile,
-  getCameraErrorArabic,
-  inferTryOnCategory,
-  isValidTryOnAssetUrl,
-  mergeTryOnConfig,
-  tryOnCategoryLabelAr,
-} from '../utils/tryOn';
-import { teardownTryOnSession } from '../utils/tryOnPrivacy';
-import {
-  createInitialFrameState,
-  createLocalPoseLandmarker,
-  isWebGLSupported,
-  renderTryOnFrame,
-} from '../utils/tryOnRenderer';
 
 interface VirtualTryOnPanelProps {
   product: Product;
@@ -26,484 +9,149 @@ interface VirtualTryOnPanelProps {
   onOpenAdminEdit?: (product: Product) => void;
 }
 
-type TryOnStatus = 'initializing' | 'active' | 'error';
+const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
-export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({
-  product,
-  isAdmin,
-  onClose,
-  onOpenAdminEdit,
-}) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const displayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const inferenceCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const occlusionCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
+async function compressPhoto(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('من فضلك اختر صورة بصيغة JPG أو PNG أو WebP.');
+  if (file.size > MAX_FILE_BYTES) throw new Error('حجم الصورة كبير. اختر صورة أقل من 12 ميجابايت.');
 
-  const streamRef = useRef<MediaStream | null>(null);
-  const landmarkerRef = useRef<PoseLandmarker | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const garmentImgRef = useRef<HTMLImageElement | null>(null);
-  const frameStateRef = useRef(createInitialFrameState());
+  const source = await createImageBitmap(file);
+  const scale = Math.min(1, 1200 / Math.max(source.width, source.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('تعذر تجهيز الصورة على هذا الجهاز.');
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  source.close();
+  return canvas.toDataURL('image/jpeg', 0.84);
+}
 
-  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
-  const [perfMode, setPerfMode] = useState<'auto' | 'low'>('auto');
-  const [status, setStatus] = useState<TryOnStatus>('initializing');
-  const [statusText, setStatusText] = useState('جاري طلب إذن الكاميرا وتجهيز التتبع المحلي...');
-  const [poseDetected, setPoseDetected] = useState(false);
-  const [garmentVisible, setGarmentVisible] = useState(false);
-  const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
-  const [errorInfo, setErrorInfo] = useState<CameraErrorInfo | null>(null);
-  const [retryToken, setRetryToken] = useState(0);
+export const VirtualTryOnPanel: React.FC<VirtualTryOnPanelProps> = ({ product, onClose }) => {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [photo, setPhoto] = useState<string>('');
+  const [photoName, setPhotoName] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState('');
 
-  const resolvedCategory = inferTryOnCategory(product);
-  const hasValidAsset = isValidTryOnAssetUrl(product.tryOnAssetUrl);
-  const mergedConfig = mergeTryOnConfig(resolvedCategory, product.tryOnConfig);
-
-  // Preload transparent garment image in memory when tryOnAssetUrl is configured
-  useEffect(() => {
-    garmentImgRef.current = null;
-    if (!hasValidAsset || !product.tryOnAssetUrl) return;
-
-    let cancelled = false;
-    const img = new Image();
-    if (/^https?:\/\//i.test(product.tryOnAssetUrl)) {
-      img.crossOrigin = 'anonymous';
+  const handlePhoto = async (file?: File) => {
+    if (!file) return;
+    setError('');
+    setResult('');
+    try {
+      const data = await compressPhoto(file);
+      setPhoto(data);
+      setPhotoName(file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر قراءة الصورة.');
     }
-    img.onload = () => {
-      if (!cancelled) {
-        garmentImgRef.current = img;
-      }
-    };
-    img.onerror = () => {
-      if (!cancelled) {
-        garmentImgRef.current = null;
-      }
-    };
-    img.src = product.tryOnAssetUrl;
-
-    return () => {
-      cancelled = true;
-      garmentImgRef.current = null;
-    };
-  }, [hasValidAsset, product.tryOnAssetUrl]);
-
-  // Strict privacy teardown helper
-  const cleanupEverything = () => {
-    const report = teardownTryOnSession({
-      stream: streamRef.current,
-      video: videoRef.current,
-      canvases: [
-        displayCanvasRef.current,
-        inferenceCanvasRef.current,
-        occlusionCanvasRef.current,
-        maskCanvasRef.current,
-      ].filter((c): c is HTMLCanvasElement => !!c),
-      rafId: rafRef.current,
-      tasks: landmarkerRef.current ? [landmarkerRef.current] : [],
-      onMemoryCleared: () => {
-        streamRef.current = null;
-        rafRef.current = null;
-        landmarkerRef.current = null;
-        frameStateRef.current = createInitialFrameState();
-      },
-    });
-    return report;
   };
 
-  // Start local camera & lazy-load MediaPipe ONLY after explicit user action opened this panel
-  useEffect(() => {
-    let cancelled = false;
-
-    async function startTryOnSession() {
-      cleanupEverything();
-      setStatus('initializing');
-      setErrorInfo(null);
-      setPoseDetected(false);
-      setGarmentVisible(false);
-      setStatusText('جاري طلب إذن الكاميرا وتجهيز التتبع المحلي...');
-
-      const isLocalhost =
-        typeof window !== 'undefined' &&
-        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-      const secure = typeof window !== 'undefined' ? window.isSecureContext || isLocalhost : true;
-      const hasMedia =
-        typeof navigator !== 'undefined' &&
-        !!navigator.mediaDevices &&
-        typeof navigator.mediaDevices.getUserMedia === 'function';
-
-      if (!secure || !hasMedia) {
-        setStatus('error');
-        setErrorInfo(getCameraErrorArabic('NotSupportedError', secure, hasMedia));
-        return;
-      }
-
-      const webglAvailable = isWebGLSupported();
-      const hwThreads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
-      const profile = detectDevicePerformanceProfile(hwThreads, webglAvailable, perfMode);
-
-      try {
-        // 1. Request live camera stream (never recorded, never uploaded)
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: { ideal: facingMode },
-            width: { ideal: profile.tier === 'high' ? 720 : 480 },
-            height: { ideal: profile.tier === 'high' ? 960 : 640 },
-            frameRate: { ideal: profile.targetFps, max: 30 },
-          },
-        });
-
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-
-        // Detect multiple cameras (front/back) after permission grant
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoInputs = devices.filter((d) => d.kind === 'videoinput');
-          if (!cancelled) {
-            setHasMultipleCameras(videoInputs.length > 1);
-          }
-        } catch {}
-
-        const videoEl = videoRef.current;
-        if (!videoEl) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        videoEl.srcObject = stream;
-        videoEl.muted = true;
-        videoEl.playsInline = true;
-        await videoEl.play();
-
-        if (cancelled) {
-          cleanupEverything();
-          return;
-        }
-
-        setStatusText('جاري تحميل نموذج تتبع الجسم محليًا...');
-
-        // 2. Lazy-load MediaPipe Pose Landmarker only now
-        let landmarker: PoseLandmarker | null = null;
-        try {
-          landmarker = await createLocalPoseLandmarker(
-            profile.delegate,
-            profile.enableArmOcclusion && mergedConfig.armOcclusion && hasValidAsset
-          );
-        } catch (mlErr: any) {
-          if (!cancelled) {
-            setStatus('error');
-            setErrorInfo(
-              getCameraErrorArabic(
-                mlErr?.name || 'WebGLUnsupportedError',
-                secure,
-                hasMedia
-              )
-            );
-            cleanupEverything();
-          }
-          return;
-        }
-
-        if (cancelled) {
-          landmarker.close();
-          cleanupEverything();
-          return;
-        }
-
-        landmarkerRef.current = landmarker;
-
-        // Allocate reusable offscreen canvases in memory only
-        if (!inferenceCanvasRef.current) {
-          inferenceCanvasRef.current = document.createElement('canvas');
-        }
-        if (!occlusionCanvasRef.current) {
-          occlusionCanvasRef.current = document.createElement('canvas');
-        }
-        if (!maskCanvasRef.current) {
-          maskCanvasRef.current = document.createElement('canvas');
-        }
-
-        setStatus('active');
-        setStatusText('قف أمام الكاميرا ليظهر الطقم على جسمك');
-
-        let lastUiSync = 0;
-
-        const loop = () => {
-          if (cancelled) return;
-          const v = videoRef.current;
-          const dc = displayCanvasRef.current;
-          const ic = inferenceCanvasRef.current;
-          const oc = occlusionCanvasRef.current;
-          const mc = maskCanvasRef.current;
-
-          if (v && dc && ic && oc && mc && v.readyState >= 2) {
-            const nowMs = performance.now();
-            const res = renderTryOnFrame({
-              video: v,
-              displayCanvas: dc,
-              inferenceCanvas: ic,
-              occlusionCanvas: oc,
-              maskCanvas: mc,
-              landmarker: landmarkerRef.current,
-              garmentImage: garmentImgRef.current,
-              category: resolvedCategory,
-              config: mergedConfig,
-              mirrored: facingMode === 'user',
-              inferenceIntervalMs: profile.inferenceIntervalMs,
-              inferenceWidth: profile.inferenceWidth,
-              inferenceHeight: profile.inferenceHeight,
-              enableArmOcclusion: profile.enableArmOcclusion,
-              frameState: frameStateRef.current,
-              nowMs,
-            });
-
-            if (nowMs - lastUiSync > 180) {
-              lastUiSync = nowMs;
-              setPoseDetected(res.poseDetected);
-              setGarmentVisible(res.garmentVisible);
-              if (!hasValidAsset) {
-                setStatusText(
-                  res.poseDetected
-                    ? 'تم اكتشاف الجسم — المنتج يحتاج تجهيز طبقة شفافة'
-                    : 'تم تشغيل الكاميرا — قف أمام الكاميرا'
-                );
-              } else if (res.poseDetected && res.garmentVisible) {
-                setStatusText('تم اكتشاف الجسم — تحرك بحرية أمام الكاميرا');
-              } else {
-                setStatusText('قف أمام الكاميرا مع إظهار الكتفين لظهور القطعة');
-              }
-            }
-          }
-
-          rafRef.current = requestAnimationFrame(loop);
-        };
-
-        rafRef.current = requestAnimationFrame(loop);
-      } catch (err: any) {
-        if (!cancelled) {
-          setStatus('error');
-          setErrorInfo(getCameraErrorArabic(err?.name || 'UnknownError', secure, hasMedia));
-          cleanupEverything();
-        }
-      }
+  const generate = async () => {
+    if (!photo) {
+      setError('ارفع صورتك أولاً علشان نقدر نعرض الملابس عليك.');
+      return;
+    }
+    if (!consent) {
+      setError('لازم توافق على إرسال الصور إلى Google لمعالجة تجربة الملابس.');
+      return;
+    }
+    if (!product.image) {
+      setError('صورة المنتج غير متاحة حالياً.');
+      return;
     }
 
-    startTryOnSession();
-
-    const handlePageExit = () => {
-      cleanupEverything();
-    };
-    window.addEventListener('pagehide', handlePageExit);
-    window.addEventListener('beforeunload', handlePageExit);
-
-    return () => {
-      cancelled = true;
-      window.removeEventListener('pagehide', handlePageExit);
-      window.removeEventListener('beforeunload', handlePageExit);
-      cleanupEverything();
-    };
-  }, [facingMode, perfMode, retryToken, resolvedCategory, hasValidAsset]);
-
-  const handleCloseClick = () => {
-    cleanupEverything();
-    onClose();
+    setLoading(true);
+    setError('');
+    setResult('');
+    try {
+      const response = await fetch('/api/tryon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personImage: photo,
+          productImageUrl: product.image,
+          productName: product.name,
+          productCategory: product.category,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'تعذر إنشاء صورة التجربة. حاول مرة أخرى.');
+      }
+      if (!data.image || !data.mimeType) {
+        throw new Error('وصل رد غير مكتمل من خدمة توليد الصور.');
+      }
+      setResult(`data:${data.mimeType};base64,${data.image}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'حدث خطأ أثناء توليد الصورة.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="ar-tryon-wrap" data-testid="tryon-panel" data-tryon-status={status}>
-      {/* Hidden live <video> element strictly in-memory */}
-      <video ref={videoRef} className="vh" playsInline muted autoPlay aria-hidden="true" />
-
-      {/* Top Try-On Header */}
-      <div className="ar-tryon-head">
+    <section className="ai-tryon-panel" data-testid="tryon-panel">
+      <header className="ai-tryon-header">
         <div>
-          <h3 className="ar-tryon-title">
-            <Camera size={20} aria-hidden="true" />
-            <span>التجربة المباشرة بالكاميرا</span>
-          </h3>
-          <p className="ar-tryon-sub">{product.name}</p>
+          <span className="ai-tryon-kicker"><Sparkles size={15} /> تجربة بالذكاء الاصطناعي</span>
+          <h3>شوف شكل القطعة عليك</h3>
+          <p>{product.name} — من غير كاميرا مباشرة أو موديل 3D</p>
         </div>
-        <button
-          type="button"
-          className="btn btn-line btn-sm"
-          onClick={handleCloseClick}
-          data-testid="tryon-close-btn"
-        >
-          <X size={18} aria-hidden="true" />
-          <span>إغلاق الكاميرا والعودة للمنتج</span>
-        </button>
+        <button type="button" className="ai-tryon-close" onClick={onClose} aria-label="إغلاق"><X size={20} /></button>
+      </header>
+
+      <div className="ai-tryon-product">
+        {product.image && <img src={product.image} alt={product.name} />}
+        <div><strong>{product.name}</strong><span>{product.category || 'ملابس'}</span></div>
       </div>
 
-      {/* Missing transparent asset warning for owner / transparent preview info for customer */}
-      {!hasValidAsset && (
-        <div className="ar-notice" role="note" data-testid="tryon-missing-asset-notice">
-          <div className="ar-notice-body">
-            <strong>
-              {isAdmin
-                ? 'هذا المنتج يحتاج إلى تجهيز أصل بصري شفاف (PNG أو WebP) للتجربة المباشرة.'
-                : 'معاينة المتجر: لم يتم تجهيز طبقة ملابس شفافة مخصصة لهذه القطعة بعد.'}
-            </strong>
-            <span>
-              {isAdmin
-                ? 'يمكنك رفع صورة ملابس بخلفية شفافة من لوحة تعديل القطعة دون التأثير على صورة المنتج الأساسية.'
-                : 'تظهر صورة القطعة الأصلية بجانب الكاميرا كمرجع بينما يعمل تتبع الجسم محليًا.'}
-            </span>
-          </div>
-          {isAdmin && onOpenAdminEdit && (
-            <button
-              type="button"
-              className="btn btn-brand btn-sm"
-              onClick={() => {
-                cleanupEverything();
-                onOpenAdminEdit(product);
-              }}
-            >
-              تجهيز أصل التجربة
-            </button>
-          )}
-        </div>
-      )}
-
-      {resolvedCategory === 'unsupported' && (
-        <div className="ar-notice" role="note">
-          <div className="ar-notice-body">
-            <strong>هذه الفئة ({product.category || 'إكسسوار/حذاء'}) غير مخصصة للتلبيس على الجسم حاليًا.</strong>
-            <span>التجربة المباشرة مصممة للتيشيرتات، السويت شيرت، الهوديز، القمصان، البنطلونات، والأطقم.</span>
-          </div>
-        </div>
-      )}
-
-      {/* Main Live AR Stage */}
-      <div className="ar-stage-grid">
-        <div className="ar-stage-box">
-          {status === 'error' && errorInfo ? (
-            <div className="ar-error-box" role="alert" data-testid="tryon-error">
-              <Camera size={36} aria-hidden="true" />
-              <h4>{errorInfo.title}</h4>
-              <p>{errorInfo.message}</p>
-              <div className="ar-error-actions">
-                <button
-                  type="button"
-                  className="btn btn-brand btn-sm"
-                  onClick={() => setRetryToken((t) => t + 1)}
-                >
-                  <RefreshCw size={16} aria-hidden="true" />
-                  <span>إعادة المحاولة</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-line btn-sm"
-                  onClick={handleCloseClick}
-                >
-                  العودة لصفحة المنتج
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <canvas
-                ref={displayCanvasRef}
-                className="ar-canvas"
-                data-testid="tryon-canvas"
-                aria-label="بث الكاميرا المباشر مع تجربة الملابس"
-              />
-
-              {/* Simple Body Detection Status Indicator */}
-              <div
-                className={`ar-detect-pill ${poseDetected ? 'detected' : 'searching'}`}
-                role="status"
-                data-testid="tryon-detection-status"
-              >
-                <span className="ar-detect-dot" aria-hidden="true" />
-                <span>{statusText}</span>
-              </div>
-
-              {status === 'initializing' && (
-                <div className="ar-loading-veil">
-                  <div className="ar-spinner" aria-hidden="true" />
-                  <span>{statusText}</span>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Side Info & Controls */}
-        <div className="ar-side-panel">
-          <div className="ar-ref-card">
-            <span className="ar-ref-label">القطعة المختارة</span>
-            {product.image && (
-              <img
-                src={product.image}
-                alt={product.name}
-                className="ar-ref-thumb"
-                referrerPolicy="no-referrer"
-              />
+      {!result ? (
+        <>
+          <div className="ai-tryon-upload">
+            {photo ? (
+              <img className="ai-tryon-person-preview" src={photo} alt="معاينة صورتك" />
+            ) : (
+              <div className="ai-tryon-upload-empty"><ImagePlus size={34} /><strong>ارفع صورة واضحة ليك</strong><span>يفضل صورة كاملة للجسم، من الأمام، بإضاءة جيدة</span></div>
             )}
-            <div className="ar-ref-meta">
-              <strong>{product.name}</strong>
-              <span>{tryOnCategoryLabelAr(resolvedCategory)}</span>
-            </div>
-          </div>
-
-          <div className="ar-controls-group">
-            <button
-              type="button"
-              className="btn btn-line btn-sm"
-              onClick={() => setFacingMode((m) => (m === 'user' ? 'environment' : 'user'))}
-              disabled={status === 'initializing'}
-              data-testid="tryon-switch-camera"
-            >
-              <SwitchCamera size={17} aria-hidden="true" />
-              <span>
-                {facingMode === 'user'
-                  ? hasMultipleCameras
-                    ? 'التبديل للكاميرا الخلفية'
-                    : 'تجربة الكاميرا الخلفية'
-                  : 'التبديل للكاميرا الأمامية'}
-              </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              hidden
+              onChange={(event) => handlePhoto(event.target.files?.[0])}
+            />
+            <button type="button" className="btn btn-line" onClick={() => fileInputRef.current?.click()}>
+              <ImagePlus size={17} /> {photo ? 'تغيير الصورة' : 'اختيار صورة من الجهاز'}
             </button>
-
-            <button
-              type="button"
-              className="btn btn-line btn-sm"
-              onClick={() => setPerfMode((p) => (p === 'auto' ? 'low' : 'auto'))}
-              data-testid="tryon-perf-toggle"
-            >
-              <SlidersHorizontal size={17} aria-hidden="true" />
-              <span>
-                {perfMode === 'auto'
-                  ? 'الأداء: تلقائي (جودة عالية)'
-                  : 'الأداء: وضع موفر للأجهزة الضعيفة'}
-              </span>
-            </button>
+            {photoName && <small>{photoName}</small>}
           </div>
 
-          <div className="ar-privacy-box" data-testid="tryon-privacy-notice">
-            <ShieldCheck size={18} aria-hidden="true" />
-            <div>
-              <strong>خصوصيتك محمية 100%</strong>
-              <p>
-                تتم معالجة بث الكاميرا محليًا داخل متصفحك فقط، ولا يتم حفظ أو التقاط أو رفع أي صورة أو بيانات جسم لأي سيرفر أو قاعدة بيانات.
-              </p>
-            </div>
-          </div>
+          <label className="ai-tryon-consent">
+            <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+            <span>أوافق على إرسال صورتي وصورة المنتج إلى Google Gemini لتوليد صورة تجربة الملابس. لن يحفظ موقع SKIP الصور في قاعدة بيانات المتجر.</span>
+          </label>
 
-          {hasValidAsset && (
-            <p className="ar-hint-text">
-              {garmentVisible
-                ? 'تم تثبيت القطعة على الكتفين والخصر — جرّب التحرك يمينًا ويسارًا أو الاقتراب والابتعاد.'
-                : 'نصيحة: ارجع خطوة للخلف في إضاءة واضحة حتى يظهر الجذع والكتفان داخل الإطار.'}
-            </p>
-          )}
+          {error && <p className="ai-tryon-error" role="alert">{error}</p>}
+          <button type="button" className="btn btn-brand ai-tryon-generate" onClick={generate} disabled={loading || !photo || !consent}>
+            {loading ? <><Loader2 size={18} className="ai-tryon-spin" /> جاري توليد الصورة...</> : <><Sparkles size={18} /> جرّب الملابس على صورتي</>}
+          </button>
+          <p className="ai-tryon-note"><ShieldCheck size={15} /> التجربة صورة مولّدة وليست قياساً دقيقاً للمقاس أو ضماناً لشكل القماش على الطبيعة.</p>
+        </>
+      ) : (
+        <div className="ai-tryon-result">
+          <img src={result} alt="نتيجة تجربة الملابس بالذكاء الاصطناعي" />
+          <div className="ai-tryon-result-actions">
+            <a className="btn btn-brand" href={result} download={`SKIP-try-on-${product.id}.png`}><Download size={17} /> تنزيل الصورة</a>
+            <button type="button" className="btn btn-line" onClick={() => setResult('')}>تجربة صورة أخرى</button>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+
+      {error && result && <p className="ai-tryon-error" role="alert">{error}</p>}
+      <p className="ai-tryon-footer">تجربة الملابس بواسطة Nano Banana Pro من Google</p>
+    </section>
   );
 };
