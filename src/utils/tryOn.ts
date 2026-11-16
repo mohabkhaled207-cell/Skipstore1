@@ -129,6 +129,14 @@ export function inferTryOnCategory(product: Pick<Product, 'category' | 'name' | 
   return 'top';
 }
 
+/**
+ * التجربة اللايف بالكاميرا مدعومة للتيشيرتات (القطع العلوية) والبناطيل فقط.
+ * الأطقم الكاملة والأحذية والشنط والإكسسوارات تفضل على تجربة الصورة.
+ */
+export function isLiveTryOnCategory(category: ResolvedTryOnCategory): boolean {
+  return category === 'top' || category === 'trousers';
+}
+
 export function isValidTryOnAssetUrl(url?: string | null): boolean {
   if (!url) return false;
   const trimmed = url.trim();

@@ -2025,3 +2025,11 @@ button {
 .ai-tryon-result-actions .btn { display:inline-flex; align-items:center; gap:7px; text-decoration:none; }
 .ai-tryon-spin { animation:ai-tryon-rotate 1s linear infinite; }
 @keyframes ai-tryon-rotate { to { transform:rotate(360deg); } }
+
+/* Try-on mode switcher (live camera / AI photo) */
+.tryon-switcher { display:flex; flex-direction:column; gap:12px; width:100%; }
+.tryon-mode-tabs { display:flex; gap:6px; padding:4px; border:1px solid var(--line); border-radius:14px; background:var(--surface); }
+.tryon-mode-tab { flex:1; display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:42px; padding:8px 10px; border:0; border-radius:10px; background:transparent; color:var(--muted); font:inherit; font-size:13px; font-weight:700; cursor:pointer; }
+.tryon-mode-tab.active { background:var(--brand-soft); color:var(--brand-deep); }
+.tryon-mode-tab:disabled { opacity:.5; cursor:not-allowed; }
+.tryon-mode-hint { margin:0; color:var(--muted); font-size:12px; line-height:1.7; }

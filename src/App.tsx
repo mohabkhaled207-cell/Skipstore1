@@ -42,8 +42,9 @@ import {
   updateOrderStatusInFirestore,
   deleteOrderFromFirestore,
 } from './utils/firebase';
-import { inferTryOnCategory, isValidTryOnAssetUrl } from './utils/tryOn';
+import { inferTryOnCategory, isLiveTryOnCategory, isValidTryOnAssetUrl } from './utils/tryOn';
 import { VirtualTryOnPanel } from './components/VirtualTryOnPanel';
+import { TryOnAdminSection } from './components/TryOnAdminSection';
 
 // SVG Icons
 const Icons = {
@@ -1051,7 +1052,9 @@ export default function App() {
                     >
                       {p.name}
                     </button>
-                    
+                    {isAdmin && isLiveTryOnCategory(inferTryOnCategory(p)) && !isValidTryOnAssetUrl(p.tryOnAssetUrl) && (
+                      <span className="ar-card-owner-hint">يحتاج أصل شفاف للتجربة اللايف</span>
+                    )}
 
                     <div className="card-foot">
                       <span className={`tag ${p.price === null || p.price === undefined ? 'ask' : ''}`}>
@@ -1370,7 +1373,7 @@ export default function App() {
             </div>
           )}
 
-          {/* 2. Product Detail Modal with AI photo try-on + Add to Cart / WhatsApp */}
+          {/* 2. Product Detail Modal with live camera try-on (tops/trousers) + AI photo try-on + Add to Cart / WhatsApp */}
           {activeModal === 'detail' && selectedProduct && (
             <div
               className={`sheet wide ${isTryOnOpen ? 'ar-sheet-expanded' : ''}`}
@@ -1422,9 +1425,13 @@ export default function App() {
                             data-testid="open-tryon-btn"
                           >
                             {Icons.camera}
-                            <span>جرّب الطقم على صورتك بالذكاء الاصطناعي</span>
+                            <span>جرّب على نفسك</span>
                           </button>
-                          
+                          {isAdmin && isLiveTryOnCategory(inferTryOnCategory(selectedProduct)) && !isValidTryOnAssetUrl(selectedProduct.tryOnAssetUrl) && (
+                            <p className="ar-owner-warn" role="note">
+                              تنبيه للمالك: لتفعيل التجربة اللايف بالكاميرا لهذه القطعة ارفع صورة ملابس شفافة (PNG/WebP) من تعديل المنتج.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2130,6 +2137,17 @@ export default function App() {
                 <span>خلصت (غير متاحة في الفرع حالياً)</span>
               </label>
 
+              {/* صورة القطعة الشفافة + إعدادات التجربة اللايف بالكاميرا (تيشيرتات وبناطيل) */}
+              <TryOnAdminSection
+                productImage={productForm.image}
+                tryOnAssetUrl={productForm.tryOnAssetUrl}
+                tryOnCategory={productForm.tryOnCategory}
+                tryOnConfig={productForm.tryOnConfig}
+                onChangeAssetUrl={(url) => setProductForm((prev) => ({ ...prev, tryOnAssetUrl: url }))}
+                onChangeCategory={(cat) => setProductForm((prev) => ({ ...prev, tryOnCategory: cat }))}
+                onChangeConfig={(cfg) => setProductForm((prev) => ({ ...prev, tryOnConfig: cfg }))}
+              />
+
               {formError && (
                 <p className="err" role="alert">
                   {formError}
@@ -2165,7 +2183,7 @@ export default function App() {
                     }}
                   >
                     {Icons.camera}
-                    <span>معاينة تجربة الملابس بالذكاء الاصطناعي</span>
+                    <span>معاينة تجربة الملابس</span>
                   </button>
                 )}
                 {productForm.id && (

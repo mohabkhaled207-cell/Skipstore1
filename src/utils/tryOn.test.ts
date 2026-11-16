@@ -8,6 +8,7 @@ import {
   detectDevicePerformanceProfile,
   getCameraErrorArabic,
   inferTryOnCategory,
+  isLiveTryOnCategory,
   isValidTryOnAssetUrl,
   shouldHideOnTrackingLoss,
   smoothLandmarks,
@@ -259,4 +260,11 @@ test('PRIVACY PROOF: frame processing triggers zero network requests and zero st
   assert.equal(proof.storageWritesCount, 0);
   assert.equal(proof.passed, true);
   assert.deepEqual(proof.details, []);
+});
+
+test('live try-on is limited to tops and trousers', () => {
+  assert.equal(isLiveTryOnCategory('top'), true);
+  assert.equal(isLiveTryOnCategory('trousers'), true);
+  assert.equal(isLiveTryOnCategory('full_outfit'), false);
+  assert.equal(isLiveTryOnCategory('unsupported'), false);
 });
